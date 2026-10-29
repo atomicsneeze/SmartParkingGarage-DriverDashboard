@@ -1,6 +1,6 @@
 // Turns system vocabulary into words a driver understands. Keep all driver-facing phrasing here.
 
-import { parseSpaceId } from '../api/contract'
+import { parseSpaceId } from '../api/contract.ts'
 import type { FailureKind, ParkingKind, VehicleStage } from '../api'
 
 export function describeSpace(spaceId: string | null) {
@@ -46,6 +46,8 @@ export function failureCopy(kind: FailureKind, parking: ParkingKind, reason: str
       return { title: 'Garage is offline', body: 'The garage is not connected right now, so your request was not sent. Please try again in a moment.' }
     case 'cancelled':
       return { title: 'Request cancelled', body: `Your request was cancelled before a space was assigned${reason ? ` (${reason})` : ''}. Please request again.` }
+    case 'unknown':
+      return { title: 'We could not confirm your request', body: 'The parking system restarted while your request was being handled, so it may or may not have gone through. Check before requesting again.' }
     case 'rejected':
       return { title: 'Request not accepted', body: `The parking system did not accept this request${reason ? `: ${reason}` : '.'}` }
     default:

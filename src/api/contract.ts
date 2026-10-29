@@ -3,7 +3,7 @@
 //
 // Raw* types mirror the Pydantic models in the team repo:
 //   github.com/CEN4090L-Fall-2026/SmartParkingGarage → Backend/app/models/*.py
-//   (checked against commit 3184c60; summary in docs/frontend-api.md)
+//   (checked against commit e31806a; summary in docs/frontend-api.md)
 // If the backend models change, update the Raw* types first. TypeScript will then
 // point at every mapping below that needs to follow.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -46,8 +46,9 @@ export type RawLifecycleState =
   | 'Completed'
   | 'Failed'
 /** Only SpawnedInUnity means a vehicle exists. */
-export type RawSpawnRequestStatus = 'AcceptedByBackend' | 'ForwardedToUnity' | 'SpawnedInUnity' | 'Failed'
-export type RawCommandStatus = 'Pending' | 'Delivered' | 'Acknowledged' | 'Failed' | 'Cancelled'
+/** OutcomeUnknown (terminal): Unity received it, but the backend restarted / session ended before a result came back. */
+export type RawSpawnRequestStatus = 'AcceptedByBackend' | 'ForwardedToUnity' | 'SpawnedInUnity' | 'Failed' | 'OutcomeUnknown'
+export type RawCommandStatus = 'Pending' | 'Delivered' | 'Acknowledged' | 'Failed' | 'Cancelled' | 'OutcomeUnknown'
 export type RawDataSource = 'SeededBaseline' | 'UnityLive' | 'UnityLastKnown'
 /** CommandErrorCode: Unity's machine-readable failure reason (may be null; then use the message). */
 export type RawErrorCode = 'GarageFull' | 'LevelFull' | 'VehicleLimitReached' | 'EntranceBlocked'
@@ -193,6 +194,7 @@ const OUTCOME: Record<RawSpawnRequestStatus, RequestOutcome> = {
   ForwardedToUnity: 'Pending',
   SpawnedInUnity: 'Succeeded',
   Failed: 'Failed',
+  OutcomeUnknown: 'Unknown', // not a rejection: a car may or may not exist
 }
 
 const ERROR_CODE_KIND: Record<RawErrorCode, FailureKind> = {
@@ -261,6 +263,7 @@ const COMMAND_OUTCOME: Record<RawCommandStatus, CommandResult['outcome']> = {
   Acknowledged: 'Succeeded', // Unity accepted it. For a departure this does NOT mean the car has left yet.
   Failed: 'Failed',
   Cancelled: 'Failed',
+  OutcomeUnknown: 'Unknown', // delivered, but no result before a restart; not a rejection
 }
 
 export function parseCommand(raw: RawBackendCommand): CommandResult {

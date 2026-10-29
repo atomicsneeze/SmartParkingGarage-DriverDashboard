@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError, NotFoundError, type FailureKind, type ParkingKind, type VehicleStage } from '../api'
 import { config } from '../config'
 import { readJson, writeJson } from '../lib/storage'
@@ -14,8 +14,9 @@ import { readJson, writeJson } from '../lib/storage'
  * (Acknowledged only means Unity accepted it; the car leaving shows up in its lifecycle_state).
  *
  * Saved to localStorage so a page refresh resumes tracking the same request/vehicle instead of
- * submitting again. If the backend restarts (backend_instance_id changes), its in-memory IDs may be
- * reused, so tracking stops rather than following someone else's car.
+ * submitting again. Request and command IDs are stored in PostgreSQL and never reused, so tracking
+ * simply continues if the backend restarts. Anything Unity received but never answered before the
+ * restart comes back as OutcomeUnknown, which is shown honestly (it may or may not have happened).
  */
 export interface Departure {
   commandId: string | null // null while the POST is in flight
@@ -33,7 +34,6 @@ export type Session =
       requestId: string
       startedAt: number
       forwarded: boolean
-      instanceId: string | null
     }
   | {
       phase: 'active'
@@ -45,7 +45,6 @@ export type Session =
       startedAt: number
       parkedAt: number | null
       departure: Departure | null
-      instanceId: string | null
     }
   | { phase: 'failed'; kind: ParkingKind; level: number | null; failureKind: FailureKind; reason: string | null }
   | { phase: 'ended'; kind: ParkingKind; spaceId: string | null; reason: 'exited' | 'missing'; endedAt: number }
@@ -53,7 +52,7 @@ export type Session =
 const STORAGE_KEY = 'driver-dashboard:session'
 /** Unity acknowledges the spawn slightly before the vehicle appears in its next ~1 s snapshot. */
 const VEHICLE_GRACE_MS = 6000
-/** A request id the backend doesn't know (backend restarted) is given up on after this long. */
+/** A request id the backend doesn't know (e.g. its database was wiped) is given up on after this long. */
 const UNKNOWN_REQUEST_GIVE_UP_MS = 5000
 
 function loadSession(): Session {
@@ -67,7 +66,7 @@ function loadSession(): Session {
   return saved
 }
 
-export function useParkingSession(backendInstanceId: string | null) {
+export function useParkingSession() {
   const [session, setSessionState] = useState<Session>(loadSession)
   const [departureError, setDepartureError] = useState<string | null>(null)
 
@@ -79,14 +78,6 @@ export function useParkingSession(backendInstanceId: string | null) {
     })
   }, [])
 
-  // Latest backend instance id, read inside the polling loops below. If it differs from the one the
-  // session started under, the backend restarted and its IDs may now belong to someone else's car.
-  const instanceRef = useRef(backendInstanceId)
-  useEffect(() => {
-    instanceRef.current = backendInstanceId
-  })
-  const restarted = (started: string | null) => !!started && !!instanceRef.current && started !== instanceRef.current
-
   // ── Request a space ────────────────────────────────────────────────────────
   const requestSpace = useCallback(
     async (kind: ParkingKind, level: number | null = null) => {
@@ -95,7 +86,7 @@ export function useParkingSession(backendInstanceId: string | null) {
       try {
         const { requestId } = await api.requestParking(kind, level)
         // 202 = queued. NOT a success yet; wait for Unity's real outcome.
-        setSession({ phase: 'pending', kind, level, requestId, startedAt, forwarded: false, instanceId: backendInstanceId })
+        setSession({ phase: 'pending', kind, level, requestId, startedAt, forwarded: false })
       } catch (error) {
         let failureKind: FailureKind = 'other'
         let reason: string | null = 'could not reach the parking system'
@@ -106,7 +97,7 @@ export function useParkingSession(backendInstanceId: string | null) {
         setSession({ phase: 'failed', kind, level, failureKind, reason })
       }
     },
-    [setSession, backendInstanceId],
+    [setSession],
   )
 
   // ── Pending: poll the spawn request until Unity reports SpawnedInUnity or Failed ──
@@ -124,8 +115,8 @@ export function useParkingSession(backendInstanceId: string | null) {
         firstNotFoundAt = null
         setSession((prev) => {
           if (prev.phase !== 'pending' || prev.requestId !== pendingId) return prev
-          if (restarted(prev.instanceId)) {
-            return { phase: 'failed', kind: prev.kind, level: prev.level, failureKind: 'cancelled', reason: 'the parking system restarted' }
+          if (result.outcome === 'Unknown') {
+            return { phase: 'failed', kind: prev.kind, level: prev.level, failureKind: 'unknown', reason: null }
           }
           if (result.outcome === 'Failed') {
             return { phase: 'failed', kind: prev.kind, level: prev.level, failureKind: result.failureKind ?? 'other', reason: result.failureReason }
@@ -141,7 +132,6 @@ export function useParkingSession(backendInstanceId: string | null) {
               startedAt: Date.now(),
               parkedAt: null,
               departure: null,
-              instanceId: prev.instanceId,
             }
           }
           return prev.forwarded === result.forwardedToUnity ? prev : { ...prev, forwarded: result.forwardedToUnity }
@@ -149,12 +139,12 @@ export function useParkingSession(backendInstanceId: string | null) {
       } catch (error) {
         if (controller.signal.aborted) return
         if (error instanceof NotFoundError) {
-          // The backend no longer knows this request: it was restarted (state is in memory only).
+          // The backend has no record of this request (IDs survive restarts, so its data was likely cleared).
           firstNotFoundAt ??= Date.now()
           if (Date.now() - firstNotFoundAt > UNKNOWN_REQUEST_GIVE_UP_MS) {
             setSession((prev) =>
               prev.phase === 'pending'
-                ? { phase: 'failed', kind: prev.kind, level: prev.level, failureKind: 'cancelled', reason: 'the parking system restarted' }
+                ? { phase: 'failed', kind: prev.kind, level: prev.level, failureKind: 'cancelled', reason: 'the parking system has no record of it' }
                 : prev,
             )
           }
@@ -184,9 +174,6 @@ export function useParkingSession(backendInstanceId: string | null) {
         const now = Date.now()
         setSession((prev) => {
           if (prev.phase !== 'active' || prev.vehicleId !== vehicleId) return prev
-          if (restarted(prev.instanceId)) {
-            return { phase: 'ended', kind: prev.kind, spaceId: prev.spaceId, reason: 'missing', endedAt: now }
-          }
           if (vehicle?.stage === 'Failed') {
             return { phase: 'failed', kind: prev.kind, level: null, failureKind: 'other', reason: vehicle.failureReason }
           }
@@ -249,6 +236,11 @@ export function useParkingSession(backendInstanceId: string | null) {
       try {
         const result = await api.getCommand(departureCommandId, controller.signal)
         if (controller.signal.aborted) return
+        if (result.outcome === 'Unknown') {
+          setDepartureError('We could not confirm your departure because the parking system restarted. If your car does not start leaving, request departure again.')
+          setSession((prev) => (prev.phase === 'active' ? { ...prev, departure: null } : prev))
+          return
+        }
         if (result.outcome === 'Failed') {
           setDepartureError(
             result.failureKind === 'cancelled'
@@ -265,7 +257,7 @@ export function useParkingSession(backendInstanceId: string | null) {
           return
         }
       } catch {
-        // Network trouble or unknown command: keep trying; restarts are handled by the instance check.
+        // Network trouble or a brief restart: keep trying (command IDs survive backend restarts).
       }
       if (!controller.signal.aborted) timer = setTimeout(tick, config.pollIntervalMs)
     }

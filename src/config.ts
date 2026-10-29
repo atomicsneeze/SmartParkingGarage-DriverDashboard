@@ -19,6 +19,7 @@ export const MOCK_SCENARIOS = [
   'levelfull', // a preferred-level request fails with LevelFull (no preference still succeeds)
   'limit', // VehicleLimitReached -> garage at its vehicle limit
   'nodepart', // parking works, but Unity refuses the departure command
+  'unknown', // backend restarted before Unity confirmed -> OutcomeUnknown
   'slow', // Unity never picks up the command
   'stale', // backend up, Unity stopped reporting -> spawn returns 503
   'offline', // backend unreachable

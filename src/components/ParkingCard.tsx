@@ -212,7 +212,7 @@ function Failed({ session, availability, canRequest, onRequest, onReset }: Props
   const offerStandard = session.kind === 'EV' && session.failureKind === 'capacity' && standardOpen > 0
   const offerAnyLevel = session.failureKind === 'levelFull' && session.level !== null
   // "Try again soon" situations get amber; real failures get red.
-  const soft = ['temporary', 'offline', 'closed', 'cancelled', 'levelFull', 'vehicleLimit'].includes(session.failureKind)
+  const soft = ['temporary', 'offline', 'closed', 'cancelled', 'unknown', 'levelFull', 'vehicleLimit'].includes(session.failureKind)
 
   return (
     <section className={`card ${soft ? 'card--accent-amber' : 'card--accent-red'}`} role="alert">

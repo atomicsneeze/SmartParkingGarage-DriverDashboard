@@ -14,7 +14,7 @@ type Tab = 'park' | 'car'
 
 export default function App() {
   const feed = useGarageFeed()
-  const parking = useParkingSession(feed.status?.backendInstanceId ?? null)
+  const parking = useParkingSession()
   const [tab, setTab] = useState<Tab>('park')
 
   const { session } = parking

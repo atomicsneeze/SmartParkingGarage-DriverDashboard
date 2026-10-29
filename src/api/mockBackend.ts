@@ -163,10 +163,16 @@ export function createMockTransport(scenario: MockScenario): Transport {
   /** "Unity" picks up and executes queued spawns, like Backend/tests/fake_unity.py. */
   function advance(req: MockRequest) {
     const r = req.raw
-    if (r.status === 'SpawnedInUnity' || r.status === 'Failed' || scenario === 'slow') return
+    if (r.status === 'SpawnedInUnity' || r.status === 'Failed' || r.status === 'OutcomeUnknown' || scenario === 'slow') return
     const age = Date.now() - req.createdAt
     if (age >= ACCEPTED_MS) Object.assign(r, { status: 'ForwardedToUnity', forwarded_to_unity: true })
     if (age < EXECUTE_MS) return
+    if (scenario === 'unknown') {
+      // Delivered to Unity, then the backend restarted before Unity's result arrived.
+      Object.assign(r, { status: 'OutcomeUnknown' })
+      save(state)
+      return
+    }
 
     let failure: string | null = null
     let code: RawErrorCode | null = null
@@ -220,7 +226,7 @@ export function createMockTransport(scenario: MockScenario): Transport {
         seconds_since_last_update: stale ? 14.2 : 0.4,
         timeout_seconds: 5,
         data_source: stale ? 'UnityLastKnown' : 'UnityLive',
-        pending_commands: Object.values(state.requests).filter((r) => !['SpawnedInUnity', 'Failed'].includes(r.raw.status)).length,
+        pending_commands: Object.values(state.requests).filter((r) => !['SpawnedInUnity', 'Failed', 'OutcomeUnknown'].includes(r.raw.status)).length,
         backend_instance_id: 'demo',
       }
       return ok(status)

@@ -16,7 +16,9 @@ Optional: pass a JSON control file as a 2nd argument to flip scenarios while it 
     {"garage_full": true} / {"level_full": true} -> spawns fail with GarageFull / LevelFull (preferred level)
     {"limit": true}     -> spawns fail with VehicleLimitReached
     {"stop": true}      -> stop reporting (dashboard should show "Garage offline" after ~5 s)
-Stop with Ctrl+C. Restart the backend afterwards to clear its in-memory state.
+    {"hold": true}      -> receive commands but never answer them (restart the backend now -> OutcomeUnknown)
+If the backend restarts, this loop starts a new Unity session, like real Unity does.
+Stop with Ctrl+C.
 """
 
 import json
@@ -41,7 +43,8 @@ def settings() -> dict:
 
 
 client = httpx.Client(base_url="http://127.0.0.1:8000")
-unity = FakeUnity(client, session="DRIVER_DASHBOARD_TEST")
+# A fresh session id per run, like Unity entering Play mode (the backend remembers old sessions).
+unity = FakeUnity(client, session=f"DRIVER_DASHBOARD_TEST_{int(time.time())}")
 assert unity.snapshot().status_code == 200, "Is the backend running on :8000?"
 client.post("/api/simulation/start")
 for command in unity.poll():
@@ -133,16 +136,39 @@ def move_vehicles(now: float) -> None:
                 space["state"] = "Occupied"
 
 
+def backend_instance() -> str | None:
+    try:
+        return client.get("/api/integration/status").json()["backend_instance_id"]
+    except (httpx.HTTPError, KeyError, ValueError):
+        return None
+
+
 processed: dict[str, tuple] = {}
+instance = backend_instance()
 while True:
-    if settings().get("stop"):
+    flags = settings()
+    if flags.get("stop"):
         time.sleep(0.5)
         continue
-    for command in unity.poll():
-        command_id = command["command_id"]
-        if command_id not in processed:  # at-least-once delivery: never execute twice
-            processed[command_id] = execute(command)
-        unity.ack(command_id, *processed[command_id])
-    move_vehicles(time.time())
-    assert unity.snapshot().status_code == 200
+    try:
+        current = backend_instance()
+        if current and current != instance:
+            # Backend restarted: start a new Unity session (new id, sequence restarts at 1).
+            instance = current
+            unity.session = f"DRIVER_DASHBOARD_TEST_{int(time.time())}"
+            unity.sequence = 0
+            print("Backend restarted; new session", unity.session)
+            unity.snapshot()  # announce the new session before asking for commands (409 otherwise)
+        if current:
+            for command in unity.poll():
+                command_id = command["command_id"]
+                if flags.get("hold"):
+                    continue  # received but never answered
+                if command_id not in processed:  # at-least-once delivery: never execute twice
+                    processed[command_id] = execute(command)
+                unity.ack(command_id, *processed[command_id])
+            move_vehicles(time.time())
+            unity.snapshot()
+    except (httpx.HTTPError, AssertionError):
+        pass  # backend down/restarting or session mismatch; keep trying
     time.sleep(0.5)

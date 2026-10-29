@@ -26,7 +26,8 @@ export interface IntegrationStatus {
   backendInstanceId: string
 }
 
-export type RequestOutcome = 'Pending' | 'Succeeded' | 'Failed'
+/** Unknown = Unity received it but no result arrived before a restart. Not a rejection; a car may exist. */
+export type RequestOutcome = 'Pending' | 'Succeeded' | 'Failed' | 'Unknown'
 
 /**
  * Why a request could not be served. Each gets different driver wording:
@@ -36,6 +37,7 @@ export type RequestOutcome = 'Pending' | 'Succeeded' | 'Failed'
  * - closed:    garage isn't admitting new arrivals (e.g. draining)
  * - temporary: entrance busy/blocked (EntranceBlocked); spaces may exist, try again shortly
  * - cancelled: the simulation was reset/restarted before Unity ran the request
+ * - unknown:   Unity received it, but the system restarted before confirming (OutcomeUnknown)
  * - offline:   backend answered 503: Unity isn't connected, nothing was queued
  * - rejected:  backend refused the request itself (HTTP 4xx)
  * - other:     anything unrecognised (the raw message is shown)
@@ -47,6 +49,7 @@ export type FailureKind =
   | 'closed'
   | 'temporary'
   | 'cancelled'
+  | 'unknown'
   | 'offline'
   | 'rejected'
   | 'other'
@@ -64,7 +67,7 @@ export interface SpawnRequestResult {
 /** Outcome of a queued command (used for departures). */
 export interface CommandResult {
   commandId: string
-  outcome: 'Pending' | 'Succeeded' | 'Failed'
+  outcome: 'Pending' | 'Succeeded' | 'Failed' | 'Unknown'
   message: string | null
   failureKind: FailureKind | null
 }

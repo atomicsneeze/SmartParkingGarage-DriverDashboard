@@ -3,7 +3,7 @@
 Driver interface for the Smart Parking Garage (designed for phone screens). React + TypeScript + Vite, same stack and visual style as the Operator Dashboard. It reads from and sends commands to the existing FastAPI backend only. **No backend or Unity files are modified.**
 
 The backend contract in `src/api/contract.ts` mirrors the Pydantic models in the team GitHub repo
-(`CEN4090L-Fall-2026/SmartParkingGarage`, `Backend/src/smart_parking_backend/models/*.py`, commit `3184c60`; summary in `docs/frontend-api.md`). It has been tested end-to-end against that backend.
+(`CEN4090L-Fall-2026/SmartParkingGarage`, `Backend/src/smart_parking_backend/models/*.py`, commit `e31806a`; summary in `docs/frontend-api.md`). It has been tested end-to-end against that backend, including PostgreSQL restarts.
 
 ## Run it
 
@@ -14,12 +14,26 @@ npm run dev          # http://localhost:5174
 
 | Mode | How |
 |---|---|
-| **Real system** | Start the backend (`cd Backend && uv sync && uv run uvicorn smart_parking_backend.main:app --host 127.0.0.1 --port 8000`), press Play in Unity (*Run In Background* on), open `http://localhost:5174`. |
-| **Real backend, no Unity** | Backend as above, then from `Backend/`: `uv run python <path>/DriverDashboard/tools/fake_unity_loop.py .` Built on the backend's own `tests/fake_unity.py`; handles departures, `auto_depart` and error codes. |
-| **Demo data only** | `http://localhost:5174/?mock=1`. Scenarios: `normal`, `evfull`, `draining`, `blocked`, `levelfull`, `limit`, `nodepart`, `slow`, `stale`, `offline` (switchable from the footer). The demo backend returns the same JSON as FastAPI, so it runs the real parsing code. |
+| **Real system** | Start the backend as in [Backend/README.md](https://github.com/CEN4090L-Fall-2026/SmartParkingGarage/blob/main/Backend/README.md) (it now needs Docker for PostgreSQL; see "Starting the backend" below), press Play in Unity (*Run In Background* on), open `http://localhost:5174`. |
+| **Real backend, no Unity** | Backend as above, then from `Backend/`: `uv run python <path>/DriverDashboard/tools/fake_unity_loop.py .` Built on the backend's own `tests/fake_unity.py`; handles departures, `auto_depart`, error codes and backend restarts. |
+| **Demo data only** | `http://localhost:5174/?mock=1`. Scenarios: `normal`, `evfull`, `draining`, `blocked`, `levelfull`, `limit`, `nodepart`, `unknown`, `slow`, `stale`, `offline` (switchable from the footer). The demo backend returns the same JSON as FastAPI, so it runs the real parsing code. |
 | **On your phone** | `npm run dev -- --host`, open the Network URL on the same Wi-Fi. |
 
-Checks: `npm run build` (TypeScript + production build), `npm run lint`.
+Checks: `npm test` (26 automated tests, Node's built-in runner like the Operator Dashboard), `npm run build` (TypeScript + production build), `npm run lint`. Node 22.18 or newer.
+
+### Starting the backend (PostgreSQL since late October)
+
+From the team repo's `Backend/` folder, with Docker Desktop running (PowerShell shown):
+
+```powershell
+uv sync
+docker compose up -d --wait postgres
+$env:SPG_DATABASE_URL = 'postgresql+psycopg://smart_parking:smart_parking_dev@127.0.0.1:5432/smart_parking'
+uv run alembic upgrade head
+uv run uvicorn smart_parking_backend.main:app --host 127.0.0.1 --port 8000
+```
+
+Set `SPG_DATABASE_URL` again in every new terminal you start the backend from. Leave the database running between sessions; it keeps request history.
 
 **Why port 5174 + a proxy:** the backend's CORS list only allows `:5173` and `:3000` (`Backend/app/main.py`). Vite forwards `/api` and `/health` to FastAPI (see `vite.config.ts`), so the browser never makes a cross-origin call and the backend needs no change. It also lets the Operator Dashboard keep `:5173`.
 
@@ -36,7 +50,7 @@ Checks: `npm run build` (TypeScript + production build), `npm run lint`.
 | Departure | **Request departure** (once parked) → "waiting for the garage" → "heading to the exit" → "you have left". If Unity refuses, the reason is shown and the button comes back. Acknowledged ≠ exited: the app waits for the car's own lifecycle. | `POST /api/vehicles/{vehicle_id}/depart`, `GET /api/integration/commands/{id}` |
 | Offline / stale | Pill + banner when FastAPI is unreachable or `data_source` isn't `UnityLive`; requests pause; last data kept and labelled. | `connected`, `data_source` |
 
-Refreshing the page resumes tracking the same request or car from `localStorage`; it never re-sends. If the backend restarts (`backend_instance_id` changes) tracking stops, because in-memory IDs like `VEH_0001` may be reused for a different car.
+Refreshing the page resumes tracking the same request or car from `localStorage`; it never re-sends. Request and command IDs are stored in PostgreSQL and never reused, so tracking continues through a backend restart. If Unity had received a request but not answered before the restart, the backend reports `OutcomeUnknown` and the driver sees "We could not confirm your request" rather than a false success or failure.
 
 ## Code map
 
@@ -61,7 +75,7 @@ tools/fake_unity_loop.py    drive the real backend without Unity (uses Backend/t
 
 ## Open items
 
-1. **Live Unity test:** the backend supports `auto_depart`, `DepartVehicle` and `error_code`; confirm with Hayden that the Unity bridge consumes them, then run the full driver journey with Unity in Play mode.
+1. **Live Unity test:** Unity's source now supports `auto_depart`, `DepartVehicle` and `error_code` (per `docs/frontend-api.md`), but they have not been verified together live. Run the full driver journey with Unity in Play mode.
 2. **Idempotent spawn (optional, Joshua):** the spawn body forbids extra fields, so the client can't send its own request id. If the page reloads *during* the POST itself (a fraction of a second), the app can't tell whether it was queued, so it says so rather than risk a second car.
 3. **Driver ownership:** there is no authentication, so any client could depart any vehicle ID. Fine for the class demo; worth noting if accounts are added later.
 
