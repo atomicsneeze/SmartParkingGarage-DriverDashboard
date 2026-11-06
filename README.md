@@ -21,6 +21,8 @@ npm run dev          # http://localhost:5174
 
 Checks: `npm test` (26 automated tests, Node's built-in runner like the Operator Dashboard), `npm run build` (TypeScript + production build), `npm run lint`. Node 22.18 or newer.
 
+**Acceptance tests:** [docs/ACCEPTANCE_TESTS.md](docs/ACCEPTANCE_TESTS.md) defines 18 scenarios (DD-01 to DD-18) with inputs, expected outcomes and pass/fail criteria. `npm run acceptance` runs them all in a browser against the real backend and the simulated Unity client and writes [docs/acceptance-results.md](docs/acceptance-results.md). One-time setup: `npx playwright install chromium`; see the top of `tools/acceptance.mjs` for the rest.
+
 ### Starting the backend (PostgreSQL since late October)
 
 From the team repo's `Backend/` folder, with Docker Desktop running (PowerShell shown):
